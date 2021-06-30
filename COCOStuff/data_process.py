@@ -54,7 +54,7 @@ start_time = time.time()
 # 2. Replace COCO-2014 labels that only have things annotations with
 #    COCO-2017 things and stuff annotations
 # 3. One-hot encode to [0-170]
-if False:
+if True:
     count = 0
     labels = {}
     for file in val:

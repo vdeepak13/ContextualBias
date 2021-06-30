@@ -92,7 +92,9 @@ def main():
     classifier = multilabel_classifier(arg['device'], arg['dtype'], nclasses=arg['nclasses'],
                                        modelpath=arg['modelpath'], hidden_size=arg['hs'], learning_rate=arg['lr'],
                                        attribdecorr=(arg['model']=='attribdecorr'), compshare_lambda=arg['compshare_lambda'])
-    classifier.epoch = 1 # Reset epoch for stage 2 training
+                                       
+    if arg['model'] in ['cam', 'featuresplit', 'negativepenalty']:
+        classifier.epoch = 1 # Reset epoch for stage 2 training
     classifier.optimizer = torch.optim.SGD(classifier.model.parameters(), lr=arg['lr'], momentum=arg['momentum'], weight_decay=arg['wd'])
 
     if arg['model'] == 'cam':
@@ -156,12 +158,16 @@ def main():
 
     # Keep track of loss and mAP/recall for best model selection
     loss_epoch_list = []; exclusive_list = []; cooccur_list = []; all_list = []; nonbiased_list = []
+    if arg['model'] == 'standard':
+        epoch_start = classifier.epoch
+    else:
+        epoch_start = 1
 
     # Start training
     tb = SummaryWriter(log_dir='{}/runs'.format(arg['outdir']))
     start_time = time.time()
     print('\nStarted training at {}\n'.format(start_time))
-    for i in range(1, arg['nepoch']+1):
+    for i in range(epoch_start, arg['nepoch']+1):
 
         # Reduce learning rate from 0.1 to 0.01
         if arg['model'] != 'attribdecorr':
@@ -298,9 +304,9 @@ def main():
 
     # Print best model and close tensorboard logger
     tb.close()
-    print('Best model at {} with lowest val loss {}'.format(np.argmin(loss_epoch_list) + 1, np.min(loss_epoch_list)))
-    print('Best model at {} with highest exclusive {}'.format(np.argmax(exclusive_list) + 1, np.max(exclusive_list)))
-    print('Best model at {} with highest exclusive+cooccur {}'.format(np.argmax(np.array(exclusive_list)+np.array(cooccur_list)) + 1,
+    print('Best model at {} with lowest val loss {}'.format(epoch_start + np.argmin(loss_epoch_list) + 1, np.min(loss_epoch_list)))
+    print('Best model at {} with highest exclusive {}'.format(epoch_start + np.argmax(exclusive_list) + 1, np.max(exclusive_list)))
+    print('Best model at {} with highest exclusive+cooccur {}'.format(epoch_start + np.argmax(np.array(exclusive_list)+np.array(cooccur_list)) + 1,
                                                                       np.max(np.array(exclusive_list)+np.array(cooccur_list))))
 
 if __name__ == "__main__":
