@@ -182,7 +182,7 @@ def main():
         if arg['model'] == 'classbalancing':
             train_loss_list = classifier.train_classbalancing(trainset, biased_classes_mapped, weight)
         if arg['model'] == 'weighted':
-            train_loss_list = classifier.train_weighted(trainset, biased_classes_mapped, weight=10)
+            train_loss_list = classifier.train_weighted(trainset, biased_classes_mapped, weight=5)
         if arg['model'] == 'attribdecorr':
             train_loss_list = classifier.train_attribdecorr(trainset, pretrained_net, biased_classes_mapped,
                                                             humanlabels_to_onehot, pretrained_features)
