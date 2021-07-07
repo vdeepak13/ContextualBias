@@ -1,3 +1,6 @@
+
+
+
 import pickle, time, argparse, random
 from os import path, makedirs
 import numpy as np
@@ -14,7 +17,7 @@ def main():
     parser.add_argument('--model', type=str, default='standard',
         choices=['standard', 'cam', 'featuresplit', 'splitbiased', 'weighted',
         'removeclabels', 'removecimages', 'negativepenalty', 'classbalancing',
-        'attribdecorr', 'fs_weighted', 'fs_noweighted'])
+        'attribdecorr', 'fs_weighted', 'fs_noweighted', 'data_point'])
     parser.add_argument('--modelpath', type=str, default=None)
     parser.add_argument('--pretrainedpath', type=str, default=None)
     parser.add_argument('--outdir', type=str, default='save')
@@ -41,6 +44,11 @@ def main():
     parser.add_argument('--seed', type=int, default=999)
     parser.add_argument('--device', default=torch.device('cuda:0'))
     parser.add_argument('--dtype', default=torch.float32)
+    parser.add_argument('--weight', default=10, type=int)
+
+    parser.add_argument('--lambda_both', default=0, type=int)
+    parser.add_argument('--lambda_b', default=1, type=int)
+    parser.add_argument('--lambda_c', default=1, type=int)
 
     arg = vars(parser.parse_args())
     if arg['model'] == 'splitbiased':
@@ -92,9 +100,7 @@ def main():
     classifier = multilabel_classifier(arg['device'], arg['dtype'], nclasses=arg['nclasses'],
                                        modelpath=arg['modelpath'], hidden_size=arg['hs'], learning_rate=arg['lr'],
                                        attribdecorr=(arg['model']=='attribdecorr'), compshare_lambda=arg['compshare_lambda'])
-                                       
-    if arg['model'] in ['cam', 'featuresplit', 'negativepenalty']:
-        classifier.epoch = 1 # Reset epoch for stage 2 training
+    # classifier.epoch = 1 # Reset epoch for stage 2 training
     classifier.optimizer = torch.optim.SGD(classifier.model.parameters(), lr=arg['lr'], momentum=arg['momentum'], weight_decay=arg['wd'])
 
     if arg['model'] == 'cam':
@@ -158,16 +164,17 @@ def main():
 
     # Keep track of loss and mAP/recall for best model selection
     loss_epoch_list = []; exclusive_list = []; cooccur_list = []; all_list = []; nonbiased_list = []
-    if arg['model'] in ['standard', 'weighted']:
-        epoch_start = classifier.epoch
-    else:
+    
+    if classifier.epoch == 1:
         epoch_start = 1
-
+    else:
+        epoch_start = classifier.epoch
+    print("epoch start is ",epoch_start)
     # Start training
     tb = SummaryWriter(log_dir='{}/runs'.format(arg['outdir']))
     start_time = time.time()
     print('\nStarted training at {}\n'.format(start_time))
-    for i in range(epoch_start, arg['nepoch']+1):
+    for i in range(epoch_start, epoch_start+arg['nepoch']+1):
 
         # Reduce learning rate from 0.1 to 0.01
         if arg['model'] != 'attribdecorr':
@@ -177,12 +184,17 @@ def main():
 
         if arg['model'] in ['standard', 'removeclabels', 'removecimages', 'splitbiased']:
             train_loss_list = classifier.train(trainset)
+        if arg['model'] == 'data_point':
+            train_loss_list = classifier.train_data_points(trainset, biased_classes_mapped, 
+                                                        lambda_cooccur=arg['lambda_both'], 
+                                                        lambda_b=arg['lambda_b'], 
+                                                        lambda_c = arg['lambda_c'] )
         if arg['model'] == 'negativepenalty':
             train_loss_list = classifier.train_negativepenalty(trainset, biased_classes_mapped, penalty=10)
         if arg['model'] == 'classbalancing':
             train_loss_list = classifier.train_classbalancing(trainset, biased_classes_mapped, weight)
         if arg['model'] == 'weighted':
-            train_loss_list = classifier.train_weighted(trainset, biased_classes_mapped, weight=5)
+            train_loss_list = classifier.train_weighted(trainset, biased_classes_mapped, weight=arg['weight'])
         if arg['model'] == 'attribdecorr':
             train_loss_list = classifier.train_attribdecorr(trainset, pretrained_net, biased_classes_mapped,
                                                             humanlabels_to_onehot, pretrained_features)
@@ -190,7 +202,7 @@ def main():
             train_loss_list, lo_list, lr_list, lbce_list = classifier.train_cam(trainset, pretrained_net, biased_classes_mapped,
                 pretrained_features, classifier_features, lambda1=arg['cam_lambda1'], lambda2=arg['cam_lambda2'])
         if arg['model'] == 'featuresplit':
-            if i == 1: xs_prev_ten = []
+            if i == epoch_start: xs_prev_ten = []
             train_loss_list, xs_prev_ten, loss_non_list, loss_exc_list = classifier.train_featuresplit(trainset,
                 biased_classes_mapped, weight, xs_prev_ten, classifier_features, s_indices, split=arg['split'], weighted=True)
         if arg['model'] == 'fs_noweighted':
@@ -304,9 +316,9 @@ def main():
 
     # Print best model and close tensorboard logger
     tb.close()
-    print('Best model at {} with lowest val loss {}'.format(epoch_start + np.argmin(loss_epoch_list) + 1, np.min(loss_epoch_list)))
-    print('Best model at {} with highest exclusive {}'.format(epoch_start + np.argmax(exclusive_list) + 1, np.max(exclusive_list)))
-    print('Best model at {} with highest exclusive+cooccur {}'.format(epoch_start + np.argmax(np.array(exclusive_list)+np.array(cooccur_list)) + 1,
+    print('Best model at {} with lowest val loss {}'.format(np.argmin(loss_epoch_list) + 1 + epoch_start - 1, np.min(loss_epoch_list)))
+    print('Best model at {} with highest exclusive {}'.format(np.argmax(exclusive_list) + 1 + epoch_start - 1, np.max(exclusive_list)))
+    print('Best model at {} with highest exclusive+cooccur {}'.format(np.argmax(np.array(exclusive_list)+np.array(cooccur_list)) + 1 + epoch_start - 1,
                                                                       np.max(np.array(exclusive_list)+np.array(cooccur_list))))
 
 if __name__ == "__main__":

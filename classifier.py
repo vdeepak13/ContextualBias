@@ -1,3 +1,4 @@
+
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -48,11 +49,12 @@ class multilabel_classifier():
         # Multi-GPU training
         if torch.cuda.device_count() > 1:
             self.model = nn.DataParallel(self.model)
+            print("Multiple GPUs")
         self.model = self.model.to(device=self.device, dtype=self.dtype)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=weight_decay)
 
         self.epoch = 1
-        self.print_freq = 100
+        self.print_freq = 10
 
         if modelpath != None:
             A = torch.load(modelpath, map_location=device)
@@ -76,6 +78,11 @@ class multilabel_classifier():
                         new_state_dict[key] = value
             self.model.load_state_dict(new_state_dict)
             self.epoch = A['epoch']
+            # print("Previous optim ", self.optimizer)
+            self.optimizer.load_state_dict(A['optim'].state_dict())
+            # print(self.optimizer)
+            # sys.exit()
+            print("Loaded with epoch ",self.epoch)
 
     def forward(self, x):
         outputs = self.model(x)
@@ -178,6 +185,95 @@ class multilabel_classifier():
 
         return success, failures
 
+    def train_data_points(self, loader, biased_classes_mapped, lambda_cooccur, lambda_b, lambda_c):
+        self.model = self.model.to(device=self.device, dtype=self.dtype)
+        self.model.train()
+
+        loss_list = []
+        for i, (images, labels, ids) in enumerate(loader):
+            images_both, images_excl = torch.Tensor(0,3,224,224), torch.Tensor(0,3,224,224)
+            labels_both, labels_excl = torch.Tensor(0,self.nclasses), torch.Tensor(0,self.nclasses)
+            labels_b, labels_c = torch.Tensor(0,self.nclasses), torch.Tensor(0,self.nclasses)
+
+            for m in range(labels.shape[0]):
+                found = False
+                for b in biased_classes_mapped.keys():
+                    c = biased_classes_mapped[b]
+                    if (labels[m,b] == 1) and (labels[m,c] == 1):
+                        found = True
+                        images_both = torch.cat((images_both, images[m].unsqueeze(0)), 0)
+                        labels_both = torch.cat( (labels_both, labels[m].unsqueeze(0)), 0)
+                        label1, label2 = labels[m].clone(), labels[m].clone()
+                        label1[b] = 0 ; label2[c] = 0
+                        labels_b = torch.cat( (labels_b, label2.unsqueeze(0)), 0)
+                        labels_c = torch.cat( (labels_c, label1.unsqueeze(0)), 0)
+
+                if not found:
+                    images_excl = torch.cat( (images_excl, images[m].unsqueeze(0)), 0)
+                    labels_excl = torch.cat( (labels_excl, labels[m].unsqueeze(0)), 0)
+            
+            del images, labels 
+            torch.cuda.empty_cache()
+            assert(labels_both.shape == labels_b.shape)
+            assert(labels_b.shape == labels_c.shape)
+            # print("Original Image Shape ",images.shape)
+            # print("Both Image Shape ",images_both.shape)
+            # print("Excl Shape ",images_excl.shape)
+
+            self.optimizer.zero_grad()
+            criterion = torch.nn.BCEWithLogitsLoss()
+
+            excl_found, both_found = False, False
+            if images_excl.shape[0]:
+                excl_found = True 
+                images_excl = images_excl.to(device = self.device, dtype=self.dtype)
+                labels_excl = labels_excl.to(device = self.device, dtype=self.dtype)
+                output_excl = self.forward(images_excl)
+                loss_excl = criterion(output_excl.squeeze(), labels_excl)
+
+                del images_excl
+                del labels_excl 
+                del output_excl 
+                torch.cuda.empty_cache()
+            
+            if images_both.shape[0]:
+                both_found = True 
+                images_both = images_both.to(device = self.device, dtype=self.dtype)
+                labels_both = labels_both.to(device = self.device, dtype=self.dtype)
+                labels_b = labels_b.to(device = self.device, dtype=self.dtype)
+                labels_c = labels_c.to(device = self.device, dtype=self.dtype)
+
+                output_both = self.forward(images_both)
+                loss_both = criterion(output_both.squeeze(), labels_both)
+                loss_b = criterion(output_both.squeeze(), labels_b)
+                loss_c = criterion(output_both.squeeze(), labels_c)
+                loss_final = lambda_cooccur*loss_both + lambda_b*loss_b + lambda_c*loss_c
+
+                del images_both, labels_both, labels_c, labels_b
+                del output_both
+                torch.cuda.empty_cache()
+            
+            if both_found and excl_found:
+                loss = loss_final + loss_excl
+            elif both_found:
+                loss = loss_final
+            elif excl_found:
+                loss = loss_excl
+            else:
+                print("Some error Both shapes 0")
+                sys.exit('Exiting')
+            loss.backward()
+          
+            self.optimizer.step()
+            # print("Loss ",loss.item())
+            # sys.exit()
+
+            loss_list.append(loss.item())
+            if self.print_freq and (i % self.print_freq == 0):
+                print('Training epoch {} [{}|{}] loss: {}'.format(self.epoch, i+1, len(loader), loss.item()), flush=True)
+
+        self.epoch += 1
+        return loss_list
 
     def train_negativepenalty(self, loader, biased_classes_mapped, penalty=10):
         """Train the 'strong baseline - negative penalty' model for one epoch"""
@@ -460,7 +556,6 @@ class multilabel_classifier():
                     if (labels[m,b]==1) & (labels[m,c]==1):
                         cooccur.append(m)
                         cooccur_classes.append([b, c])
-
             # Get CAM from the current network
             classifier_features.clear()
             outputs = self.forward(images) # where the length of classifier_features increases
