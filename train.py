@@ -158,7 +158,7 @@ def main():
 
     # Keep track of loss and mAP/recall for best model selection
     loss_epoch_list = []; exclusive_list = []; cooccur_list = []; all_list = []; nonbiased_list = []
-    if arg['model'] == 'standard':
+    if arg['model'] in ['standard', 'weighted']:
         epoch_start = classifier.epoch
     else:
         epoch_start = 1
