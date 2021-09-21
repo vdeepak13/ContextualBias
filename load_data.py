@@ -115,7 +115,7 @@ def create_dataset(dataset, labels_path, biased_classes_mapped, B=100, train=Tru
 
     dset = Dataset(img_paths, img_labels, transform)
 
-    loader = DataLoader(dset, batch_size=B, shuffle=shuffle, num_workers=1)
+    loader = DataLoader(dset, batch_size=B, shuffle=shuffle, num_workers=0)
 
     return loader
 
